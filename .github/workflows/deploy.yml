@@ -1,0 +1,55 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed app folders
+        id: changed
+        run: |
+          git fetch origin main --depth=2
+          CHANGED=$(git diff --name-only HEAD~1 HEAD | grep '/' | cut -d'/' -f1 | sort -u | grep -v '^\.' || true)
+          echo "folders=$CHANGED" >> $GITHUB_OUTPUT
+          echo "Changed folders: $CHANGED"
+
+      - name: Authenticate to Google Cloud
+        if: steps.changed.outputs.folders != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        if: steps.changed.outputs.folders != ''
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy changed apps
+        if: steps.changed.outputs.folders != ''
+        env:
+          PROJECT_ID: riala-489507
+          REGION: asia-northeast1
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          for APP in $(echo "${{ steps.changed.outputs.folders }}"); do
+            echo "Deploying $APP ..."
+            gcloud run deploy "$APP" \\
+              --source "./$APP" \\
+              --region "$REGION" \\
+              --project "$PROJECT_ID" \\
+              --allow-unauthenticated \\
+              --set-env-vars "GEMINI_API_KEY=$GEMINI_API_KEY" \\
+              --quiet
+            URL=$(gcloud run services describe "$APP" --region "$REGION" --project "$PROJECT_ID" --format "value(status.url)")
+            echo "deployed: $URL"
+          done
